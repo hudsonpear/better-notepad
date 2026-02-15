@@ -211,8 +211,9 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
-                // Send files to existing window
-                let _ = window.emit("open-files", argv);
+                // Send files to existing window (skip .exe path)
+                let files: Vec<String> = argv.iter().skip(1).cloned().collect();
+                let _ = window.emit("open-files", files);
 
                 // Restore & focus window
                 let _ = window.show();

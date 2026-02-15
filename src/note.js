@@ -745,7 +745,6 @@ async function createTab(title = "Untitled.txt", path = null, content = "") {
   extra.innerHTML = "&nbsp;";
   lineNumbers.appendChild(extra);
 
-
   syncEditorOffset(tab);
 
   // Save state
@@ -843,6 +842,9 @@ function _renderHighlights() {
     .replace(/&lt;&lt;&lt;MARK&gt;&gt;&gt;/g, "<mark>")
     .replace(/&lt;&lt;&lt;END&gt;&gt;&gt;/g, "</mark>");
 
+  // ✅ ADD: Append extra line break to keep scroll sync (like line numbers)
+  escaped += '\n';
+
   hl.innerHTML = escaped;
 
   const editor = state.editor;
@@ -873,7 +875,7 @@ function escapeHTML(str) {
       "'": "&#39;"
     }[m]));
 }
-
+/* 
 function makeLineNumberUpdater(textarea, lineNumbers) {
   let lastLineCount = (textarea.value.match(/\n/g)?.length || 0) + 1;
   let timer;
@@ -905,8 +907,37 @@ function makeLineNumberUpdater(textarea, lineNumbers) {
       lastLineCount = lineCount;
     }, 20); // 20ms = feels instant but avoids spam
   };
-}
+} */
+function makeLineNumberUpdater(textarea, lineNumbers) {
+  let lastLineCount = (textarea.value.match(/\n/g)?.length || 0) + 1;
+  let timer;
 
+  return function updateLineNumbers() {
+    if (!lineNumbersVisible || lineNumbers.style.display === "none") return;
+
+    const value = textarea.value;
+    const lineCount = (value.match(/\n/g)?.length || 0) + 1;
+    if (lineCount === lastLineCount) return;
+
+    // ✅ REMOVED debounce - update immediately
+    if (lineCount > lastLineCount) {
+      const frag = document.createDocumentFragment();
+      for (let i = lastLineCount + 1; i <= lineCount; i++) {
+        const div = document.createElement("div");
+        div.className = "line-number";
+        div.textContent = i;
+        frag.appendChild(div);
+      }
+      lineNumbers.insertBefore(frag, lineNumbers.lastChild);
+    } else {
+      while (lineNumbers.children.length > lineCount + 1) {
+        lineNumbers.children[lineNumbers.children.length - 2].remove();
+      }
+    }
+
+    lastLineCount = lineCount;
+  };
+}
 
 tabsEl.addEventListener("wheel", (event) => {
   event.preventDefault();
@@ -996,9 +1027,19 @@ function setActiveTab(tab) {
   updateCursorStatus();
   updateStatusFile();
 
-  if ( findInput.value || !findPanel.classList.contains('hidden') ) {
+  /*   if (findInput.value || !findPanel.classList.contains('hidden') ) {
     updateFindMatches();
     renderHighlights();
+  } */
+ 
+  // ✅ Only render highlights if find panel is actually open
+  if (!findPanel.classList.contains('hidden') && findInput.value) {
+    updateFindMatches();
+    renderHighlights();
+  }
+  else {
+    // ✅ Clear highlights if find panel is closed
+    clearHighlights();
   }
 
   syncEditorOffset(tab);
@@ -1354,7 +1395,17 @@ function applyTabZoom(textarea, percent) {
     setFileZoom(state.path, percent);
   }
 
-  renderHighlights();
+  
+  // ✅ Only render highlights if find panel is actually open
+  if (!findPanel.classList.contains('hidden') && findInput.value) {
+    updateFindMatches();
+    renderHighlights();
+  } 
+  else {
+    // ✅ Clear highlights if find panel is closed
+    clearHighlights();
+  }
+
   syncFindMapHeight();
 }
 
@@ -1908,7 +1959,7 @@ const smartUpdateFindMarkers = smartDebounce(
 );
 
 // INPUT (typing)
-editorContainer.addEventListener("input", e => {
+/* editorContainer.addEventListener("input", e => {
   if (!e.target.classList.contains("editor")) return;
   const tab = getTabFromEditor(e.target);
   if (!tab) return;
@@ -1916,8 +1967,13 @@ editorContainer.addEventListener("input", e => {
   if (!state) return;
   state.isDirty = true;
   updateTitleAndTab();
-  if (!lineNumbersVisible || lineNumbers.style.display === "none") {
+  // if (!lineNumbersVisible || lineNumbers.style.display === "none") {
+  //  state.updateLineNumbers();
+  //}
+  if (lineNumbersVisible && state.lineNumbers.style.display !== "none") {  // ✅ CORRECT
     state.updateLineNumbers();
+    // ✅ ADD: Sync scroll after updating line numbers
+    // state.lineNumbers.scrollTop = state.editor.scrollTop;
   }
   syncEditorOffset(tab);
   updateCursorStatus();
@@ -1927,6 +1983,37 @@ editorContainer.addEventListener("input", e => {
   if (state.isFindOpen) {
     smartUpdateFindMarkers();
     renderHighlights(); // Keep existing debounce
+  }
+}); */
+// INPUT (typing)
+editorContainer.addEventListener("input", e => {
+  if (!e.target.classList.contains("editor")) return;
+  const tab = getTabFromEditor(e.target);
+  if (!tab) return;
+  const state = tabsState.get(tab);
+  if (!state) return;
+  state.isDirty = true;
+  updateTitleAndTab();
+  
+  if (lineNumbersVisible && state.lineNumbers.style.display !== "none") {
+    state.updateLineNumbers();
+  }
+  
+  // ✅ IMMEDIATE scroll sync after any input (including Enter)
+  requestAnimationFrame(() => {
+    state.lineNumbers.scrollTop = state.editor.scrollTop;
+    state.highlightLayer.scrollTop = state.editor.scrollTop;
+  });
+  
+  syncEditorOffset(tab);
+  updateCursorStatus();
+  updateWordCharCount();
+  updateTotalLines();
+  
+  // ✅ Smart debounced updates
+  if (state.isFindOpen) {
+    smartUpdateFindMarkers();
+    renderHighlights();
   }
 });
 
@@ -1955,7 +2042,7 @@ editorContainer.addEventListener("scroll", e => {
   state.highlightLayer.scrollTop = e.target.scrollTop;
   state.highlightLayer.scrollLeft = e.target.scrollLeft;
   state.lineNumbers.scrollTop = e.target.scrollTop;
-  state.lineNumbers.scrollTop = state.editor.scrollTop;
+  //state.lineNumbers.scrollTop = state.editor.scrollTop;
 }, true);
 
 function highlightCurrentLine(editor) {
@@ -1979,8 +2066,7 @@ function getCurrentLineFast(textarea) {
   const textBeforeCaret = textarea.value.slice(0, textarea.selectionStart);
   return (textBeforeCaret.match(/\n/g) || []).length + 1;
 }
-
-
+/* 
 editorContainer.addEventListener("keydown", e => {
   if (!e.target.classList.contains("editor")) return;
   if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "x") return;
@@ -1994,6 +2080,50 @@ editorContainer.addEventListener("keydown", e => {
 
   const tab = getTabFromEditor(editor);
   const state = tabsState.get(tab);
+
+  const text = editor.value;
+  const pos = editor.selectionStart;
+
+  const lineStart = text.lastIndexOf("\n", pos - 1) + 1;
+  let lineEnd = text.indexOf("\n", pos);
+  if (lineEnd === -1) lineEnd = text.length;
+
+  // Select whole line INCLUDING newline
+  editor.setSelectionRange(lineStart, Math.min(lineEnd + 1, text.length));
+
+  // Native cut → keeps undo history + clipboard
+  document.execCommand("cut");
+
+  // Mark dirty
+  if (!state.isDirty) {
+    state.isDirty = true;
+    updateTitleAndTab();
+  }
+}); */
+editorContainer.addEventListener("keydown", e => {
+  if (!e.target.classList.contains("editor")) return;
+  
+  const tab = getTabFromEditor(e.target);
+  const state = tabsState.get(tab);
+  if (!state) return;
+
+  // ✅ Sync scroll on Enter key
+  if (e.key === "Enter") {
+    requestAnimationFrame(() => {
+      state.lineNumbers.scrollTop = state.editor.scrollTop;
+      state.highlightLayer.scrollTop = state.editor.scrollTop;
+    });
+  }
+
+  // Ctrl+X cut line
+  if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "x") return;
+
+  const editor = e.target;
+
+  // If text selected → let browser cut normally
+  if (editor.selectionStart !== editor.selectionEnd) return;
+
+  e.preventDefault();
 
   const text = editor.value;
   const pos = editor.selectionStart;
@@ -2907,7 +3037,7 @@ function hideLoadingDelayed() {
 }
 
 // ----------------- INIT ------------------------
-
+/* 
 (async () => {
   const paths = await invoke("get_opened_file");
   await initializeWindow();
@@ -2929,8 +3059,44 @@ function hideLoadingDelayed() {
     applyLineNumbersToAllTabs();
   }
   updateTitle();
+})(); */
+(async () => {
+  const paths = await invoke("get_opened_file");
+  await initializeWindow();
+  await loadZoomFile();
+  
+  let loadedCount = 0;
+  
+  if (paths && paths.length) {
+    showLoadingDelayed("Loading files...");
+    
+    for (const filePath of paths) {
+      try {
+        // ✅ Check if file exists by attempting to read it
+        const content = await invoke("read_text_file", { path: filePath });
+        await createTab(getFileName(filePath), filePath, content);
+        loadedCount++;
+      } 
+      catch (e) {
+        console.warn(`Skipping non-existent file: ${filePath}`, e);
+        // Continue to next file
+      }
+    }
+    
+    hideLoadingDelayed();
+  }
+  
+  // ✅ If no files were loaded, create a new tab
+  if (loadedCount === 0) {
+    await createTab("Untitled.txt");
+  }
+  
+  if (lineNumbersVisible) {
+    applyLineNumbersToAllTabs();
+  }
+  updateTitle();
 })();
-
+/* 
 listen("open-files", async (event) => {
   const paths = event.payload;
 
@@ -2959,9 +3125,63 @@ listen("open-files", async (event) => {
       const content = await invoke("read_text_file", { path: filePath });
       await createTab(getFileName(filePath), filePath, content);
     }
-  } catch (e) {
+  } 
+  catch (e) {
     console.error("Failed to open files:", e);
-  } finally {
+  } 
+  finally {
     hideLoadingDelayed(); // ✅ ALWAYS runs
+  }
+}); */
+
+listen("open-files", async (event) => {
+  const paths = event.payload;
+
+  if (!paths || !paths.length) return;
+
+  showLoadingDelayed("Loading files...");
+  
+  let loadedCount = 0;
+
+  try {
+    for (const filePath of paths) {
+      // Check if already open
+      let existingTab = null;
+
+      for (const [tab, state] of tabsState) {
+        if (state.path === filePath) {
+          existingTab = tab;
+          break;
+        }
+      }
+
+      if (existingTab) {
+        setActiveTab(existingTab);
+        loadedCount++;
+        continue;
+      }
+
+      // ✅ Try to read file, skip if doesn't exist
+      try {
+        const content = await invoke("read_text_file", { path: filePath });
+        await createTab(getFileName(filePath), filePath, content);
+        loadedCount++;
+      } catch (e) {
+        console.warn(`Skipping non-existent file: ${filePath}`, e);
+        // Continue to next file
+      }
+    }
+    
+    // ✅ If no files were loaded, create a new tab
+    if (loadedCount === 0) {
+      await createTab("Untitled.txt");
+    }
+    
+  } 
+  catch (e) {
+    console.error("Failed to open files:", e);
+  } 
+  finally {
+    hideLoadingDelayed();
   }
 });

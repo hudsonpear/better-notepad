@@ -31,7 +31,7 @@
     ],
     "fileAssociations": [
         {
-          "ext": ["txt", "md", "log", "ini", "json", "bat", "cfg", "js", "html", "htm", "css", "vbs", "reg", "xml"],
+          "ext": ["md", "log", "ini", "json", "bat", "cfg", "js", "html", "htm", "css", "vbs", "reg", "xml", "sh", "ps1", "txt"],
           "name": "Better Notepad",
           "rank": "Alternate"
         }
