@@ -10,7 +10,7 @@
 
 ## Features
 
-- 📄 Smart Encoding Detection - Automatically detects and handles UTF-8, UTF-8 BOM, UTF-16 LE/BE BOM, and ANSI
+- 📄 Smart Encoding Detection - Automatically handles UTF-8, UTF-8 BOM, UTF-16 LE/BE BOM, and ANSI
 - 🤗 Emoji Support - Full Unicode emoji rendering and input
 - 🗂️ Multi-Tab Interface - Work on multiple files simultaneously with unlimited tabs
 - ✂️ Smart Line Operations - Ctrl+X cuts entire line when no text is selected
