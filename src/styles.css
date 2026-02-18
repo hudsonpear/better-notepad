@@ -1252,3 +1252,19 @@ input:focus,select:focus {
   border-radius: 6px;
   background: var(--background-color);
 }
+
+/*  DRAGGING TABS */
+
+.tab {
+  cursor: grab;
+  user-select: none;
+}
+
+.tab-close {
+  cursor: pointer;
+}
+
+.tab-dragging {
+  opacity: 0.4;
+  cursor: grabbing !important;
+}

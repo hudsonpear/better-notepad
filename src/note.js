@@ -3036,30 +3036,142 @@ function hideLoadingDelayed() {
   hideLoading();
 }
 
-// ----------------- INIT ------------------------
-/* 
-(async () => {
-  const paths = await invoke("get_opened_file");
-  await initializeWindow();
-  await loadZoomFile();
-  showLoadingDelayed("Loading files...");
-  if (paths && paths.length) {
-    for (const filePath of paths) {
-      const content = await invoke("read_text_file", { path: filePath });
-      await createTab(getFileName(filePath), filePath, content);
-      hideLoadingDelayed();
+// ---- TAB DRAG-TO-REORDER SYSTEM ----
+
+let draggedTab = null;
+let isDraggingTab = false;
+let dragStartX = 0;
+let insertBeforeTab = null;
+
+const dropIndicator = document.createElement("div");
+dropIndicator.id = "tab-drop-indicator";
+dropIndicator.style.cssText = `
+  position: fixed;
+  width: 2px;
+  background: white;
+  border-radius: 2px;
+  pointer-events: none;
+  display: none;
+  z-index: 9999;
+  box-shadow: 0 0 6px rgba(255,255,255,0.5);
+`;
+document.body.appendChild(dropIndicator);
+
+function initTabDragging() {
+  tabsEl.addEventListener("mousedown", onTabDragStart, true);
+}
+
+function onTabDragStart(e) {
+  const tab = e.target.closest(".tab");
+  if (!tab) return;
+  if (e.target.classList.contains("tab-close")) return;
+  if (e.button !== 0) return;
+
+  draggedTab = tab;
+  dragStartX = e.clientX;
+
+  document.addEventListener("mousemove", onTabDragMove);
+  document.addEventListener("mouseup", onTabDragEnd);
+}
+
+function onTabDragMove(e) {
+  if (!draggedTab) return;
+
+  const dx = Math.abs(e.clientX - dragStartX);
+  if (!isDraggingTab) {
+    if (dx < 5) return;
+    isDraggingTab = true;
+    draggedTab.classList.add("tab-dragging");
+  }
+
+  // Only real tabs, exclude the dragged one
+  const allTabs = [...tabsEl.querySelectorAll(".tab")];
+  const tabs = allTabs.filter(t => t !== draggedTab);
+
+  if (tabs.length === 0) {
+    dropIndicator.style.display = "none";
+    return;
+  }
+
+  insertBeforeTab = null;
+  let indicatorX = null;
+  let indicatorTop = null;
+  let indicatorHeight = null;
+
+  // Find which gap the mouse is in
+  for (const t of tabs) {
+    const r = t.getBoundingClientRect();
+    const mid = r.left + r.width / 2;
+
+    if (e.clientX < mid) {
+      insertBeforeTab = t;
+      indicatorX = r.left;
+      indicatorTop = r.top;
+      indicatorHeight = r.height;
+      break;
     }
-  } 
-  else {
-    await createTab("Untitled.txt");
-    hideLoadingDelayed();
   }
-  hideLoadingDelayed();
-  if (lineNumbersVisible) {
-    applyLineNumbersToAllTabs();
+
+  // Mouse is past the midpoint of ALL tabs → snap to end
+  if (insertBeforeTab === null) {
+    const lastTab = tabs[tabs.length - 1];
+    const r = lastTab.getBoundingClientRect();
+    indicatorX = r.right + 1;
+    indicatorTop = r.top;
+    indicatorHeight = r.height;
   }
-  updateTitle();
-})(); */
+
+  dropIndicator.style.display = "block";
+  dropIndicator.style.left = indicatorX + "px";
+  dropIndicator.style.top = indicatorTop + "px";
+  dropIndicator.style.height = indicatorHeight + "px";
+}
+
+function onTabDragEnd() {
+  document.removeEventListener("mousemove", onTabDragMove);
+  document.removeEventListener("mouseup", onTabDragEnd);
+
+  dropIndicator.style.display = "none";
+
+  if (!isDraggingTab) {
+    draggedTab = null;
+    return;
+  }
+
+  draggedTab.classList.remove("tab-dragging");
+
+  if (insertBeforeTab) {
+    // Insert before the target tab
+    tabsEl.insertBefore(draggedTab, insertBeforeTab);
+  } else {
+    // Insert at the very end — before addTab button if it exists
+    const addBtn = document.getElementById("addTab");
+    const prevBtn = document.getElementById("tabPrev");
+    const nextBtn = document.getElementById("tabNext");
+
+    // Find the first non-tab sibling to insert before
+    const nonTabSibling = [...tabsEl.children].find(el =>
+      !el.classList.contains("tab") && el !== draggedTab
+    );
+
+    if (nonTabSibling) {
+      tabsEl.insertBefore(draggedTab, nonTabSibling);
+    } else {
+      tabsEl.appendChild(draggedTab);
+    }
+  }
+
+  draggedTab = null;
+  isDraggingTab = false;
+  insertBeforeTab = null;
+
+  updateNavButtons();
+}
+
+initTabDragging();
+
+// ----------------- INIT ------------------------
+
 (async () => {
   const paths = await invoke("get_opened_file");
   await initializeWindow();
@@ -3096,43 +3208,6 @@ function hideLoadingDelayed() {
   }
   updateTitle();
 })();
-/* 
-listen("open-files", async (event) => {
-  const paths = event.payload;
-
-  // Nothing to do → DO NOT show loader
-  if (!paths || !paths.length) return;
-
-  showLoadingDelayed("Loading files...");
-
-  try {
-    for (const filePath of paths.slice(1)) {
-      // Check if already open
-      let existingTab = null;
-
-      for (const [tab, state] of tabsState) {
-        if (state.path === filePath) {
-          existingTab = tab;
-          break;
-        }
-      }
-
-      if (existingTab) {
-        setActiveTab(existingTab);
-        continue;
-      }
-
-      const content = await invoke("read_text_file", { path: filePath });
-      await createTab(getFileName(filePath), filePath, content);
-    }
-  } 
-  catch (e) {
-    console.error("Failed to open files:", e);
-  } 
-  finally {
-    hideLoadingDelayed(); // ✅ ALWAYS runs
-  }
-}); */
 
 listen("open-files", async (event) => {
   const paths = event.payload;
@@ -3166,7 +3241,8 @@ listen("open-files", async (event) => {
         const content = await invoke("read_text_file", { path: filePath });
         await createTab(getFileName(filePath), filePath, content);
         loadedCount++;
-      } catch (e) {
+      } 
+      catch (e) {
         console.warn(`Skipping non-existent file: ${filePath}`, e);
         // Continue to next file
       }
