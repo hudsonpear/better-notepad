@@ -353,7 +353,7 @@
 
       <div class="aboutContentDiv">
           <img id="logo" src="./img/blogo.png" alt="">
-          <div>Better Notepad 1.0.1</div>
+          <div>Better Notepad 1.0.7</div>
           <div>2026</div>
           <div>Created by: Hudson Pear (pyrus)</div>
           <div class="">
@@ -385,7 +385,12 @@
           </div>
       </div>
 
-      <div class="settContentDiv ">
+      <div class="settTabs" role="tablist">
+        <button type="button" id="settTabGeneral" class="settTab active" data-pane="settPaneGeneral" role="tab" aria-selected="true">Settings</button>
+        <button type="button" id="settTabHotkeys" class="settTab" data-pane="settPaneHotkeys" role="tab" aria-selected="false">Hotkeys</button>
+      </div>
+
+      <div id="settPaneGeneral" class="settContentDiv settPane" role="tabpanel">
 
         <div id="" class="settings-mode ">
             <div class="lightdark-div" >
@@ -518,6 +523,25 @@
         </div>
 
       </div><!-- SETTINGS CONTENT -->
+
+      <div id="settPaneHotkeys" class="settPane hotkeysPane hidden" role="tabpanel">
+        <div class="hotkeyRow"><span class="hotkeyKeys"><kbd>Ctrl</kbd>+<kbd>Tab</kbd></span><span class="hotkeyDesc">Change Tabs</span></div>
+        <div class="hotkeyRow"><span class="hotkeyKeys"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd></span><span class="hotkeyDesc">Reopen closed tab</span></div>
+        <div class="hotkeyRow"><span class="hotkeyKeys"><kbd>Ctrl</kbd>+<kbd>X</kbd></span><span class="hotkeyDesc">Cut + Remove Lines</span></div>
+        <div class="hotkeyRow"><span class="hotkeyKeys"><kbd>Ctrl</kbd>+<kbd>N</kbd></span><span class="hotkeyDesc">New file</span></div>
+        <div class="hotkeyRow"><span class="hotkeyKeys"><kbd>Ctrl</kbd>+<kbd>W</kbd></span><span class="hotkeyDesc">Close tab</span></div>
+        <div class="hotkeyRow"><span class="hotkeyKeys"><kbd>Ctrl</kbd>+<kbd>O</kbd></span><span class="hotkeyDesc">Open file</span></div>
+        <div class="hotkeyRow"><span class="hotkeyKeys"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Alt</kbd>+<kbd>S</kbd></span><span class="hotkeyDesc">Save All</span></div>
+        <div class="hotkeyRow"><span class="hotkeyKeys"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd></span><span class="hotkeyDesc">Save As</span></div>
+        <div class="hotkeyRow"><span class="hotkeyKeys"><kbd>Ctrl</kbd>+<kbd>S</kbd></span><span class="hotkeyDesc">Save</span></div>
+        <div class="hotkeyRow"><span class="hotkeyKeys"><kbd>Ctrl</kbd>+<kbd>P</kbd></span><span class="hotkeyDesc">Print</span></div>
+        <div class="hotkeyRow"><span class="hotkeyKeys"><kbd>Ctrl</kbd>+<kbd>+</kbd></span><span class="hotkeyDesc">Zoom in</span></div>
+        <div class="hotkeyRow"><span class="hotkeyKeys"><kbd>Ctrl</kbd>+<kbd>-</kbd></span><span class="hotkeyDesc">Zoom out</span></div>
+        <div class="hotkeyRow"><span class="hotkeyKeys"><kbd>Ctrl</kbd>+<kbd>0</kbd></span><span class="hotkeyDesc">Reset zoom</span></div>
+        <div class="hotkeyRow"><span class="hotkeyKeys"><kbd>Ctrl</kbd>+<kbd>F</kbd></span><span class="hotkeyDesc">Find</span></div>
+        <div class="hotkeyRow"><span class="hotkeyKeys"><kbd>F3</kbd></span><span class="hotkeyDesc">Next/Previous match</span></div>
+        <div class="hotkeyRow"><span class="hotkeyKeys"><kbd>Ctrl</kbd>+<kbd>G</kbd></span><span class="hotkeyDesc">Go to line</span></div>
+      </div><!-- HOTKEYS CONTENT -->
 
     </div><!-------------------------/SETTINGS WINDOW-------------------------------->
 

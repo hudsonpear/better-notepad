@@ -20,6 +20,26 @@ mirrorDiv.style.left = "0";
 mirrorDiv.style.zIndex = "-9999";
 document.body.appendChild(mirrorDiv);
 
+// Hidden mirror used to measure how many visual rows a logical line takes
+// when word wrap is on (so the gutter can keep one number per logical line).
+const wrapMirror = document.createElement("div");
+wrapMirror.setAttribute("aria-hidden", "true");
+Object.assign(wrapMirror.style, {
+  position: "absolute",
+  top: "0",
+  left: "0",
+  visibility: "hidden",
+  zIndex: "-9999",
+  pointerEvents: "none",
+  margin: "0",
+  border: "0",
+  padding: "0",
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
+  overflowWrap: "break-word",
+});
+document.body.appendChild(wrapMirror);
+
 const findInput = document.getElementById("findInput");
 const replaceInput = document.getElementById("replaceInput");
 const gotoInput = document.getElementById("gotoInput");
@@ -436,6 +456,7 @@ theEmail.onclick = function() {
 aboutBtn.onclick = function() {
   noteMenu.classList.toggle('show');
   aboutWindow.classList.toggle('hidden');
+  clampWindowToViewport(aboutWindow);
 }
 async function copyToClipboard(text) {
   try {
@@ -546,7 +567,7 @@ document.addEventListener("keydown", async (e) => {
   if (e.ctrlKey && e.key === "f") {
     e.preventDefault();
     findPanel.classList.remove("hidden");
-    findInput.focus();
+    requestAnimationFrame(() => { findInput.focus(); findInput.select(); });
 
     if (activeTab) {
       const state = tabsState.get(activeTab);
@@ -594,7 +615,7 @@ document.addEventListener("keydown", async (e) => {
   if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "f") {
       e.preventDefault();
       findPanel.classList.remove("hidden");
-      findInput.focus();
+      requestAnimationFrame(() => { findInput.focus(); findInput.select(); });
 
       if (activeTab) {
         const state = tabsState.get(activeTab);
@@ -724,26 +745,21 @@ async function createTab(title = "Untitled.txt", path = null, content = "") {
   const resizeObserver = new ResizeObserver(() => {
     syncFindMapHeight(tab);
     updateFindScrollbarMarkers();
+    // width change => text rewraps => gutter heights must be remeasured
+    updateLineNumbers(true);
   });
   resizeObserver.observe(wrapper);
 
   // Line number updater
   const updateLineNumbers = makeLineNumberUpdater(textarea, lineNumbers);
 
-  // Build line numbers
-  const lineCount = (textarea.value.match(/\n/g)?.length || 0) + 1;
+  // Build line numbers (spacer first, updater fills the rest)
   lineNumbers.innerHTML = "";
-  for (let i = 1; i <= lineCount; i++) {
-    const div = document.createElement("div");
-    div.className = "line-number";
-    div.textContent = i;
-    lineNumbers.appendChild(div);
-  }
-  // Spacer
   const extra = document.createElement("div");
   extra.className = "line-number";
   extra.innerHTML = "&nbsp;";
   lineNumbers.appendChild(extra);
+  updateLineNumbers(true);
 
   syncEditorOffset(tab);
 
@@ -784,7 +800,7 @@ async function createTab(title = "Untitled.txt", path = null, content = "") {
   textarea.addEventListener("keydown", e => {
     if (e.key === "Tab" && !e.ctrlKey && !e.shiftKey) {
       e.preventDefault();
-      document.execCommand("insertText", false, "  ");
+      document.execCommand("insertText", false, "\t");
     }
   }, { signal });
 
@@ -795,7 +811,8 @@ async function createTab(title = "Untitled.txt", path = null, content = "") {
   updateNavButtons();
   updateCloseButtons();
   updateZoomStatus();
-  renderHighlights();
+  clearTimeout(highlightTimer);
+  clearHighlights();
 
 } //creteTab
 
@@ -828,24 +845,22 @@ function _renderHighlights() {
   }
 
   const text = state.editor.value;
-  const safeQuery = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const regex = new RegExp(safeQuery, "gi");
+  const normalText = stripAccents(text).toLowerCase();
+  const normalQuery = stripAccents(query).toLowerCase();
+  const matchLen = normalQuery.length;
 
-  // Mark matches in raw text
-  const marked = text.replace(regex, m => `<<<MARK>>>${m}<<<END>>>`);
+  let html = "";
+  let lastIndex = 0;
+  let pos = 0;
+  while ((pos = normalText.indexOf(normalQuery, lastIndex)) !== -1) {
+    html += escapeHTML(text.slice(lastIndex, pos));
+    html += `<mark>${escapeHTML(text.slice(pos, pos + matchLen))}</mark>`;
+    lastIndex = pos + matchLen;
+  }
+  html += escapeHTML(text.slice(lastIndex));
+  html += '\n';
 
-  // Escape everything
-  let escaped = escapeHTML(marked);
-
-  // Restore marks
-  escaped = escaped
-    .replace(/&lt;&lt;&lt;MARK&gt;&gt;&gt;/g, "<mark>")
-    .replace(/&lt;&lt;&lt;END&gt;&gt;&gt;/g, "</mark>");
-
-  // ✅ ADD: Append extra line break to keep scroll sync (like line numbers)
-  escaped += '\n';
-
-  hl.innerHTML = escaped;
+  hl.innerHTML = html;
 
   const editor = state.editor;
   hl.style.height = editor.clientHeight + "px";
@@ -862,6 +877,10 @@ function _renderHighlights() {
     "'": "&#39;"
   }[m]));
 } */
+function stripAccents(str) {
+  return str.normalize("NFD").replace(/[̀-ͯ]/g, "");
+}
+
 function escapeHTML(str) {
   if (!str) return "";
 
@@ -908,35 +927,165 @@ function makeLineNumberUpdater(textarea, lineNumbers) {
     }, 20); // 20ms = feels instant but avoids spam
   };
 } */
+// Metrics of the text area that decide how text wraps
+function getEditorLayout(textarea) {
+  const cs = getComputedStyle(textarea);
+  let lineHeight = parseFloat(cs.lineHeight);
+  if (!lineHeight || Number.isNaN(lineHeight)) {
+    lineHeight = (parseFloat(cs.fontSize) || 14) * 1.1;
+  }
+  const width =
+    textarea.clientWidth -
+    (parseFloat(cs.paddingLeft) || 0) -
+    (parseFloat(cs.paddingRight) || 0);
+  return { cs, lineHeight, width };
+}
+
+// Measure several lines in one layout pass
+function measureWrapRows(texts, lineHeight) {
+  wrapMirror.textContent = "";
+  const frag = document.createDocumentFragment();
+  const nodes = [];
+  for (const text of texts) {
+    const div = document.createElement("div");
+    div.textContent = text.length ? text : " ";
+    frag.appendChild(div);
+    nodes.push(div);
+  }
+  wrapMirror.appendChild(frag);
+
+  const rows = nodes.map(node =>
+    Math.max(1, Math.round(node.offsetHeight / lineHeight))
+  );
+
+  wrapMirror.textContent = "";
+  return rows;
+}
+
 function makeLineNumberUpdater(textarea, lineNumbers) {
-  let lastLineCount = (textarea.value.match(/\n/g)?.length || 0) + 1;
-  let timer;
+  // rows-per-line cache, valid while wrap width / line height / font stay put
+  let rowCache = new Map();
+  let prevRows = [];
+  let prevWrap = null;
+  let prevWidth = -1;
+  let prevLineHeight = -1;
+  let prevFont = "";
 
-  return function updateLineNumbers() {
-    if (!lineNumbersVisible || lineNumbers.style.display === "none") return;
+  // top offset (px) of each logical line inside the textarea
+  let lineTops = [0];
 
-    const value = textarea.value;
-    const lineCount = (value.match(/\n/g)?.length || 0) + 1;
-    if (lineCount === lastLineCount) return;
+  function rebuild(force) {
+    const wrapped = textarea.classList.contains("wrap");
+    const { cs, lineHeight, width } = getEditorLayout(textarea);
+    const font = `${cs.fontFamily}|${cs.fontSize}|${cs.fontWeight}|${cs.letterSpacing}|${cs.tabSize}`;
 
-    // ✅ REMOVED debounce - update immediately
-    if (lineCount > lastLineCount) {
-      const frag = document.createDocumentFragment();
-      for (let i = lastLineCount + 1; i <= lineCount; i++) {
-        const div = document.createElement("div");
-        div.className = "line-number";
-        div.textContent = i;
-        frag.appendChild(div);
-      }
-      lineNumbers.insertBefore(frag, lineNumbers.lastChild);
+    const layoutChanged =
+      force ||
+      wrapped !== prevWrap ||
+      width !== prevWidth ||
+      lineHeight !== prevLineHeight ||
+      font !== prevFont;
+
+    if (layoutChanged) rowCache = new Map();
+
+    const lines = textarea.value.split("\n");
+    const total = lines.length;
+
+    // --- rows per logical line ---
+    const rows = new Array(total);
+    if (!wrapped || width <= 0) {
+      rows.fill(1);
     } else {
-      while (lineNumbers.children.length > lineCount + 1) {
-        lineNumbers.children[lineNumbers.children.length - 2].remove();
+      wrapMirror.style.width = width + "px";
+      wrapMirror.style.fontFamily = cs.fontFamily;
+      wrapMirror.style.fontSize = cs.fontSize;
+      wrapMirror.style.fontWeight = cs.fontWeight;
+      wrapMirror.style.fontStyle = cs.fontStyle;
+      wrapMirror.style.letterSpacing = cs.letterSpacing;
+      wrapMirror.style.lineHeight = cs.lineHeight;
+      wrapMirror.style.tabSize = cs.tabSize;
+      wrapMirror.style.wordBreak = cs.wordBreak;
+      wrapMirror.style.overflowWrap = cs.overflowWrap;
+
+      const missingIdx = [];
+      const missingTxt = [];
+      for (let i = 0; i < total; i++) {
+        const cached = rowCache.get(lines[i]);
+        if (cached !== undefined) rows[i] = cached;
+        else {
+          missingIdx.push(i);
+          missingTxt.push(lines[i]);
+        }
+      }
+      if (missingIdx.length) {
+        const measured = measureWrapRows(missingTxt, lineHeight);
+        for (let k = 0; k < missingIdx.length; k++) {
+          rows[missingIdx[k]] = measured[k];
+          if (rowCache.size >= 50000) rowCache.clear(); // keep the cache bounded
+          rowCache.set(missingTxt[k], measured[k]);
+        }
       }
     }
 
-    lastLineCount = lineCount;
+    // --- line tops (used by goto / find scrolling) ---
+    lineTops = new Array(total + 1);
+    let top = 0;
+    for (let i = 0; i < total; i++) {
+      lineTops[i] = top;
+      top += rows[i] * lineHeight;
+    }
+    lineTops[total] = top;
+
+    prevWrap = wrapped;
+    prevWidth = width;
+    prevLineHeight = lineHeight;
+    prevFont = font;
+
+    if (!lineNumbersVisible || lineNumbers.style.display === "none") {
+      prevRows = rows;
+      return;
+    }
+
+    // --- gutter: one entry per logical line, sized to its wrapped height ---
+    let count = lineNumbers.children.length - 1; // last child is the spacer
+    while (count > total) {
+      lineNumbers.children[count - 1].remove();
+      count--;
+    }
+    if (count < total) {
+      const frag = document.createDocumentFragment();
+      for (let i = count; i < total; i++) {
+        const div = document.createElement("div");
+        div.className = "line-number";
+        div.textContent = i + 1;
+        frag.appendChild(div);
+      }
+      lineNumbers.insertBefore(frag, lineNumbers.lastChild);
+    }
+
+    for (let i = 0; i < total; i++) {
+      if (!layoutChanged && prevRows[i] === rows[i]) continue;
+      const div = lineNumbers.children[i];
+      if (!div) break;
+      div.style.height = rows[i] > 1 ? rows[i] * lineHeight + "px" : "";
+    }
+
+    prevRows = rows;
+  }
+
+  const updateLineNumbers = function (force = false) {
+    rebuild(force);
   };
+
+  // px offset of a 1-based logical line, wrap aware
+  updateLineNumbers.lineTop = function (line) {
+    if (line <= 1) return 0;
+    if (line - 1 < lineTops.length) return lineTops[line - 1];
+    const { lineHeight } = getEditorLayout(textarea);
+    return (line - 1) * lineHeight;
+  };
+
+  return updateLineNumbers;
 }
 
 tabsEl.addEventListener("wheel", (event) => {
@@ -1022,6 +1171,7 @@ function setActiveTab(tab) {
   updateTitleAndTab();
   applyTabZoom(state.editor, state.zoom);
   if (state.path) setFileZoom(state.path, state.zoom);
+  state.updateLineNumbers?.(true); // remeasure wrap now that the tab has a width
   updateZoomStatus();
   updateWordCharCount();
   updateCursorStatus();
@@ -1043,6 +1193,48 @@ function setActiveTab(tab) {
   }
 
   syncEditorOffset(tab);
+}
+
+function confirmCloseScope() {
+  return new Promise(resolve => {
+    const modal = document.getElementById("closeConfirm");
+    const text = document.getElementById("closeConfirmText");
+    modal.classList.remove("hidden");
+    text.textContent = "Close this tab or all tabs?";
+    const save = document.getElementById("closeSaveBtn");
+    const dont = document.getElementById("closeDontSaveBtn");
+    const cancel = document.getElementById("closeCancelBtn");
+    function cleanup(result) {
+      modal.classList.add("hidden");
+      save.onclick = dont.onclick = cancel.onclick = null;
+      resolve(result);
+    }
+    save.textContent = "Close This Tab";
+    dont.textContent = "Close All Tabs";
+    cancel.textContent = "Cancel";
+    save.onclick = () => cleanup("current");
+    dont.onclick = () => cleanup("all");
+    cancel.onclick = () => cleanup("cancel");
+  });
+}
+
+async function closeAllTabs() {
+  const dirty = [...tabsState.values()].some(s => s.isDirty);
+  if (dirty) {
+    const res = await confirmExitApp();
+    if (res === "cancel") return;
+    if (res === "save-all") await saveAllFunc();
+  }
+  for (const [tab, state] of [...tabsState]) {
+    state.controller.abort();
+    state.resizeObserver.disconnect();
+    state.wrapper.remove();
+    tab.remove();
+    tabsState.delete(tab);
+  }
+  await createTab("Untitled.txt");
+  updateNavButtons();
+  updateCloseButtons();
 }
 
 function confirmClose(tab) {
@@ -1391,6 +1583,9 @@ function applyTabZoom(textarea, percent) {
     state.highlightLayer.style.lineHeight = lineHeight + "px";
   }
 
+  // font/zoom change => text rewraps
+  state.updateLineNumbers?.(true);
+
   if (state.path) {
     setFileZoom(state.path, percent);
   }
@@ -1455,9 +1650,24 @@ let forceClose = false;
 
 await appWindow.onCloseRequested(async (event) => {
   if (forceClose) return;
-  const dirty = [...tabsState.values()].some(s => s.isDirty);
-  if (!dirty) return;
   event.preventDefault();
+
+  if (tabsState.size > 1) {
+    const scope = await confirmCloseScope();
+    if (scope === "cancel") return;
+    if (scope === "current") {
+      if (activeTab) await closeTab(activeTab);
+      return;
+    }
+    // scope === "all" — fall through to close app
+  }
+
+  const dirty = [...tabsState.values()].some(s => s.isDirty);
+  if (!dirty) {
+    forceClose = true;
+    await appWindow.close();
+    return;
+  }
   const res = await confirmExitApp();
   if (res === "save-all") {
     await saveAllFunc();
@@ -1541,7 +1751,7 @@ const findBtn = document.getElementById('findBtn');
 findBtn.addEventListener('click', async () => {
   noteMenu.classList.toggle('show');
   findPanel.classList.remove("hidden");
-  findInput.focus();
+  requestAnimationFrame(() => { findInput.focus(); findInput.select(); });
   if (activeTab) {
     const state = tabsState.get(activeTab);
     state.findMap.classList.remove("hidden");
@@ -1622,9 +1832,10 @@ function updateFindMatches() {
 
   findMatches = [];
   findIndex = 0;
+  lastSearchAnchor = null;
 
-  const lowerText = text.toLowerCase();
-  const lowerQuery = query.toLowerCase();
+  const lowerText = stripAccents(text).toLowerCase();
+  const lowerQuery = stripAccents(query).toLowerCase();
 
   let pos = 0;
   while ((pos = lowerText.indexOf(lowerQuery, pos)) !== -1) {
@@ -1648,12 +1859,11 @@ function selectMatch(focusEditor = true) {
   const pos = findMatches[findIndex];
   if (focusEditor) state.editor.focus();
   state.editor.selectionStart = pos;
-  state.editor.selectionEnd = pos + query.length;
+  state.editor.selectionEnd = pos + stripAccents(query).length;
   // Vertical scroll
   const before = state.editor.value.slice(0, pos);
   const line = before.split("\n").length;
-  const lineHeight = parseFloat(getComputedStyle(state.editor).lineHeight);
-  state.editor.scrollTop = (line - 1) * lineHeight;
+  state.editor.scrollTop = state.updateLineNumbers.lineTop(line);
   // Horizontal scroll
   fastScrollCaret(state.editor);
 }
@@ -1673,13 +1883,11 @@ replaceOneBtn.onclick = () => {
   if (!state) return;
   const query = findInput.value;
   const repl = replaceInput.value;
+  const matchLen = stripAccents(query).length;
   const pos = findMatches[findIndex];
-  // Focus editor FIRST
   state.editor.focus();
-  // Select match
   state.editor.selectionStart = pos;
-  state.editor.selectionEnd = pos + query.length;
-  // Replace (undo-safe)
+  state.editor.selectionEnd = pos + matchLen;
   document.execCommand("insertText", false, repl);
   markDirty(state);
   updateFindMatches();
@@ -1693,9 +1901,14 @@ replaceAllBtn.onclick = () => {
   const query = findInput.value;
   const repl = replaceInput.value;
   if (!query) return;
-  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const regex = new RegExp(escaped, "gi"); // g = all, i = ignore case
-  const text = state.editor.value.replace(regex, repl);
+  updateFindMatches();
+  if (!findMatches.length) return;
+  const matchLen = stripAccents(query).length;
+  let text = state.editor.value;
+  for (let i = findMatches.length - 1; i >= 0; i--) {
+    const p = findMatches[i];
+    text = text.slice(0, p) + repl + text.slice(p + matchLen);
+  }
   state.editor.select();
   document.execCommand("insertText", false, text);
   markDirty(state);
@@ -1731,50 +1944,63 @@ goBtn.onclick = async () => {
   state.editor.selectionStart = pos;
   state.editor.selectionEnd = pos;
   // Scroll line into view
-  const lineHeight = parseFloat(getComputedStyle(state.editor).lineHeight);
-  state.editor.scrollTop = (line - 1) * lineHeight;
+  state.editor.scrollTop = state.updateLineNumbers.lineTop(line);
 };
 
 
 let lastSearchAnchor = null;
 
+function refreshFindMatches() {
+  if (!activeTab) return;
+  const state = tabsState.get(activeTab);
+  if (!state) return;
+  const query = findInput.value;
+  if (!query) { findMatches = []; return; }
+  const lowerText = stripAccents(state.editor.value).toLowerCase();
+  const lowerQuery = stripAccents(query).toLowerCase();
+  findMatches = [];
+  let pos = 0;
+  while ((pos = lowerText.indexOf(lowerQuery, pos)) !== -1) {
+    findMatches.push(pos);
+    pos += lowerQuery.length;
+  }
+  if (findIndex >= findMatches.length) findIndex = Math.max(0, findMatches.length - 1);
+}
+
 function jumpToPrevMatchBeforeCursor() {
-  if (!activeTab || !findMatches.length) return;
+  if (!activeTab) return;
+  refreshFindMatches();
+  if (!findMatches.length) return;
   const state = tabsState.get(activeTab);
   if (!state) return;
   const cursor = state.editor.selectionStart;
-  if (lastSearchAnchor !== cursor) {
+  if (lastSearchAnchor === null || lastSearchAnchor !== cursor) {
     lastSearchAnchor = cursor;
     let idx = -1;
     for (let i = findMatches.length - 1; i >= 0; i--) {
-      if (findMatches[i] < cursor) {
-        idx = i;
-        break;
-      }
+      if (findMatches[i] < cursor) { idx = i; break; }
     }
     if (idx === -1) idx = findMatches.length - 1;
     findIndex = idx;
-  } 
-  else {
+  } else {
     findIndex = (findIndex - 1 + findMatches.length) % findMatches.length;
   }
   selectMatch(true);
 }
 
 function jumpToMatchAfterCursor() {
-  if (!activeTab || !findMatches.length) return;
+  if (!activeTab) return;
+  refreshFindMatches();
+  if (!findMatches.length) return;
   const state = tabsState.get(activeTab);
   if (!state) return;
   const cursor = state.editor.selectionEnd;
-  // First F3 after moving cursor → anchor to cursor
-  if (lastSearchAnchor !== cursor) {
+  if (lastSearchAnchor === null || lastSearchAnchor !== cursor) {
     lastSearchAnchor = cursor;
     let idx = findMatches.findIndex(pos => pos >= cursor);
     if (idx === -1) idx = 0;
     findIndex = idx;
-  } 
-  // Next F3 presses → just cycle normally
-  else {
+  } else {
     findIndex = (findIndex + 1) % findMatches.length;
   }
   selectMatch(true);
@@ -1817,8 +2043,7 @@ gotoInput.addEventListener("input", async () => {
   pos += col - 1;
   await new Promise(r => requestAnimationFrame(r));
   state.editor.selectionStart = state.editor.selectionEnd = pos;
-  const lineHeight = parseFloat(getComputedStyle(state.editor).lineHeight);
-  state.editor.scrollTop = (line - 1) * lineHeight;
+  state.editor.scrollTop = state.updateLineNumbers.lineTop(line);
 
     // 🔥 ADD THESE
   state.lineNumbers.scrollTop = state.editor.scrollTop;
@@ -1900,9 +2125,13 @@ function syncFindMapHeight(tab) {
 
 function getScrollTopForMatch(editor, pos) {
   const textBefore = editor.value.slice(0, pos);
-  const line = textBefore.split("\n").length - 1;
+  const line = textBefore.split("\n").length;
+  const state = tabsState.get(getTabFromEditor(editor));
+  if (state?.updateLineNumbers?.lineTop) {
+    return state.updateLineNumbers.lineTop(line);
+  }
   const lineHeight = parseFloat(getComputedStyle(editor).lineHeight);
-  return line * lineHeight;
+  return (line - 1) * lineHeight;
 }
 
 function getPixelY(editor, pos) {
@@ -1994,11 +2223,10 @@ editorContainer.addEventListener("input", e => {
   if (!state) return;
   state.isDirty = true;
   updateTitleAndTab();
-  
-  if (lineNumbersVisible && state.lineNumbers.style.display !== "none") {
-    state.updateLineNumbers();
-  }
-  
+
+  // always run: keeps gutter heights and wrap-aware line offsets in sync
+  state.updateLineNumbers();
+
   // ✅ IMMEDIATE scroll sync after any input (including Enter)
   requestAnimationFrame(() => {
     state.lineNumbers.scrollTop = state.editor.scrollTop;
@@ -2010,7 +2238,6 @@ editorContainer.addEventListener("input", e => {
   updateWordCharCount();
   updateTotalLines();
   
-  // ✅ Smart debounced updates
   if (state.isFindOpen) {
     smartUpdateFindMarkers();
     renderHighlights();
@@ -2128,21 +2355,19 @@ editorContainer.addEventListener("keydown", e => {
   const text = editor.value;
   const pos = editor.selectionStart;
 
-  const lineStart = text.lastIndexOf("\n", pos - 1) + 1;
+  const lineStart = pos === 0 ? 0 : text.lastIndexOf("\n", pos - 1) + 1;
   let lineEnd = text.indexOf("\n", pos);
   if (lineEnd === -1) lineEnd = text.length;
 
-  // Select whole line INCLUDING newline
-  editor.setSelectionRange(lineStart, Math.min(lineEnd + 1, text.length));
+  const selEnd = Math.min(lineEnd + 1, text.length);
+  const lineText = text.slice(lineStart, selEnd);
 
-  // Native cut → keeps undo history + clipboard
-  document.execCommand("cut");
+  if (!lineText) return;
 
-  // Mark dirty
-  if (!state.isDirty) {
-    state.isDirty = true;
-    updateTitleAndTab();
-  }
+  navigator.clipboard.writeText(lineText).catch(() => {});
+  editor.focus();
+  editor.setSelectionRange(lineStart, selEnd);
+  document.execCommand("insertText", false, "");
 });
 
 //DRAG WINDOW SYSTEM------------------------------------
@@ -2156,6 +2381,21 @@ draggableIds.forEach((id) => {
     draggableElements.push({ dragHandle, form });
 });
 
+// Keep a floating window fully inside the app viewport
+function clampWindowToViewport(form) {
+    if (form.classList.contains('hidden')) return;
+
+    // read the on-screen box first, then drop the centering transform so
+    // left/top mean the same thing they did visually
+    const rect = form.getBoundingClientRect();
+    const maxLeft = Math.max(0, window.innerWidth - rect.width);
+    const maxTop = Math.max(0, window.innerHeight - rect.height);
+
+    form.style.transform = 'none';
+    form.style.left = Math.min(Math.max(0, rect.left), maxLeft) + 'px';
+    form.style.top = Math.min(Math.max(0, rect.top), maxTop) + 'px';
+}
+
 draggableElements.forEach((draggable) => {
     let isDraggingWin = false;
     let dragOffsetX = 0;
@@ -2165,17 +2405,40 @@ draggableElements.forEach((draggable) => {
     document.addEventListener('mouseup', stopDrag);
     function startDrag(e) {
         isDraggingWin = true;
-        dragOffsetX = e.pageX - draggable.form.offsetLeft;
-        dragOffsetY = e.pageY - draggable.form.offsetTop;
+
+        // freeze the centering transform into plain left/top so drag math is 1:1
+        const rect = draggable.form.getBoundingClientRect();
+        draggable.form.style.transform = 'none';
+        draggable.form.style.left = rect.left + 'px';
+        draggable.form.style.top = rect.top + 'px';
+
+        dragOffsetX = e.clientX - rect.left;
+        dragOffsetY = e.clientY - rect.top;
+        e.preventDefault();
     }
     function dragForm(e) {
-        if (isDraggingWin) {
-            draggable.form.style.left = e.pageX - dragOffsetX + 'px';
-            draggable.form.style.top = e.pageY - dragOffsetY + 'px';
-        }
+        if (!isDraggingWin) return;
+
+        const rect = draggable.form.getBoundingClientRect();
+        const maxLeft = Math.max(0, window.innerWidth - rect.width);
+        const maxTop = Math.max(0, window.innerHeight - rect.height);
+
+        // clamp so the window can't leave the notepad borders
+        const left = Math.min(Math.max(0, e.clientX - dragOffsetX), maxLeft);
+        const top = Math.min(Math.max(0, e.clientY - dragOffsetY), maxTop);
+
+        draggable.form.style.left = left + 'px';
+        draggable.form.style.top = top + 'px';
     }
     function stopDrag() {
         isDraggingWin = false;
+    }
+});
+
+// App resized => pull the windows back inside
+window.addEventListener('resize', () => {
+    for (const draggable of draggableElements) {
+        clampWindowToViewport(draggable.form);
     }
 });
 
@@ -2191,7 +2454,31 @@ settCloseBtn.addEventListener('click', () => {
 settBtn.addEventListener('click', () => {
   noteMenu.classList.toggle('show');
   settWindow.classList.remove('hidden');
+  showSettTab('settPaneGeneral');
+  clampWindowToViewport(settWindow);
 });
+
+// Settings window tabs (Settings / Hotkeys)
+const settTabs = [...document.querySelectorAll('.settTab')];
+const settPanes = [...document.querySelectorAll('.settPane')];
+
+function showSettTab(paneId) {
+  for (const pane of settPanes) {
+    pane.classList.toggle('hidden', pane.id !== paneId);
+  }
+  for (const tab of settTabs) {
+    const active = tab.dataset.pane === paneId;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-selected', active ? 'true' : 'false');
+  }
+}
+
+for (const tab of settTabs) {
+  tab.addEventListener('click', () => {
+    showSettTab(tab.dataset.pane);
+    clampWindowToViewport(settWindow); // pane height changed
+  });
+}
 
 const lightdark_mode = document.getElementById('lightdark_mode');
 const line_break = document.getElementById('line_break');
@@ -2828,6 +3115,7 @@ function applyWordWrapToAllTabs() {
   for (const state of tabsState.values()) {
     if (wrap) state.editor.classList.add("wrap");
     else state.editor.classList.remove("wrap");
+    state.updateLineNumbers?.(true);
   }
 }
 
@@ -2878,6 +3166,7 @@ function applyLineNumbersToAllTabs() {
   for (const state of tabsState.values()) {
     state.lineNumbers.style.display = lineNumbersVisible ? "block" : "none";
     syncEditorOffset(state.tab);
+    state.updateLineNumbers?.(true);
   }
 }
 

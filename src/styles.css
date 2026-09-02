@@ -159,6 +159,14 @@ body {
 }
 
 
+/* one entry per logical line; height grows with wrapped rows */
+.line-number {
+  box-sizing: border-box;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+}
+
 .line-number.highlighted {
   color: var(--text-color);
   font-weight: bold;
@@ -969,7 +977,7 @@ textarea {
 
   line-height: 1.1;
   white-space: pre;
-  tab-size: 2;
+  tab-size: 8;
 
   padding-left: 5px;
   padding: 0 0 0 5px;
@@ -1005,7 +1013,7 @@ textarea {
 
   line-height: 1.1;
   white-space: pre;
-  tab-size: 2;
+  tab-size: 8;
 
   padding-left: 5px;
   box-sizing: border-box;
@@ -1065,6 +1073,83 @@ textarea {
   z-index: 99!important;
   user-select: none;
 } 
+
+/* SETTINGS TABS */
+
+.settTabs {
+  display: flex;
+  gap: 2px;
+  margin: 0 10px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.settTab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 6px 12px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--tab-font-color-inactive);
+  cursor: pointer;
+}
+
+.settTab:hover {
+  background-color: var(--btn-hover-color);
+}
+
+.settTab.active {
+  color: var(--tab-font-color-active);
+  font-weight: var(--tab-font-weight-active);
+  border-bottom-color: var(--tab-active);
+}
+
+/* HOTKEYS PANE */
+
+.hotkeysPane {
+  margin: 10px 5px 0 5px;
+  padding: 5px;
+  max-height: 260px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hotkeyRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+}
+
+.hotkeyKeys {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--number-color);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.hotkeyKeys kbd {
+  font-family: var(--editor-font-family);
+  font-size: 12px;
+  color: var(--text-color);
+  background-color: var(--light-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 2px 6px;
+  line-height: 1.2;
+}
+
+.hotkeyDesc {
+  color: var(--text-color);
+  font-size: 14px;
+  text-align: right;
+}
 
 .settContentDiv {
   padding-top: 5px;
